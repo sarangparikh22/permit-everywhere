@@ -28,26 +28,31 @@ contract ERC20PermitEverywhere {
 
     /// @notice The current nonce for a signer. This value will be incremented
     ///         for each executed permit message.
-    /// @dev Owner -> current nonce.
-    mapping(address => uint256) public currentNonce;
+    /// @dev Owner -> to -> current nonce.
+    mapping(address => mapping(address => uint256)) public currentNonce;
 
     constructor() {
-        DOMAIN_SEPARATOR = keccak256(abi.encode(
-            keccak256('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)'),
-            keccak256(bytes('ERC20PermitEverywhere')),
-            keccak256('1.0.0'),
-            block.chainid,
-            address(this)
-        ));
-        TRANSFER_PERMIT_TYPEHASH =
-            keccak256('PermitTransferFrom(address token,address spender,uint256 maxAmount,uint256 deadline,uint256 nonce)');
+        DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256(bytes("ERC20PermitEverywhere")),
+                keccak256("1.0.0"),
+                block.chainid,
+                address(this)
+            )
+        );
+        TRANSFER_PERMIT_TYPEHASH = keccak256(
+            "PermitTransferFrom(address token,address spender,uint256 maxAmount,uint256 deadline,uint256 nonce)"
+        );
     }
 
     /// @notice Increase sender's nonce by `increaseAmount`. This will effectively
     ///         cancel any outstanding permits signed with a nonce lower than the
     ///         final value.
-    function increaseNonce(uint256 increaseAmount) external {
-        currentNonce[msg.sender] += increaseAmount;
+    function increaseNonce(uint256 increaseAmount, address to) external {
+        currentNonce[msg.sender][to] += increaseAmount;
     }
 
     /// @notice Execute a signed permit message to transfer ERC20 tokens
@@ -64,16 +69,15 @@ contract ERC20PermitEverywhere {
         uint256 amount,
         PermitTransferFrom calldata permit,
         Signature calldata sig
-    )
-        external
-    {
-        require(msg.sender == permit.spender, 'SPENDER_NOT_PERMITTED');
-        require(permit.deadline >= block.timestamp, 'PERMIT_EXPIRED');
-        require(permit.maxAmount >= amount, 'EXCEEDS_PERMIT_AMOUNT');
+    ) external {
+        require(msg.sender == permit.spender, "SPENDER_NOT_PERMITTED");
+        require(permit.deadline >= block.timestamp, "PERMIT_EXPIRED");
+        require(permit.maxAmount >= amount, "EXCEEDS_PERMIT_AMOUNT");
 
         require(
-            from == _getSigner(hashPermit(permit, currentNonce[from]++), sig),
-            'INVALID_SIGNER'
+            from ==
+                _getSigner(hashPermit(permit, currentNonce[from][to]++), sig),
+            "INVALID_SIGNER"
         );
 
         _transferFrom(permit.token, from, to, amount);
@@ -89,7 +93,7 @@ contract ERC20PermitEverywhere {
         bytes32 typeHash = TRANSFER_PERMIT_TYPEHASH;
         assembly {
             // Hash the permit message in-place to compute the struct hash.
-            if lt(permit, 0x20)  {
+            if lt(permit, 0x20) {
                 invalid()
             }
             // Overwrite the words above and below the permit object temporarily.
@@ -105,7 +109,10 @@ contract ERC20PermitEverywhere {
             // 0x40 will be overwritten temporarily.
             let memPointer := mload(0x40)
             // Hash the domain separator and struct hash to compute the final EIP712 hash.
-            mstore(0x00, 0x1901000000000000000000000000000000000000000000000000000000000000)
+            mstore(
+                0x00,
+                0x1901000000000000000000000000000000000000000000000000000000000000
+            )
             mstore(0x02, domainSeparator)
             mstore(0x22, structHash)
             hash := keccak256(0x00, 0x42)
@@ -114,12 +121,21 @@ contract ERC20PermitEverywhere {
         }
     }
 
-    function _getSigner(bytes32 hash, Signature calldata sig) private pure returns (address signer) {
+    function _getSigner(bytes32 hash, Signature calldata sig)
+        private
+        pure
+        returns (address signer)
+    {
         signer = ecrecover(hash, sig.v, sig.r, sig.s);
-        require(signer != address(0), 'INVALID_SIGNATURE');
+        require(signer != address(0), "INVALID_SIGNATURE");
     }
 
-    function _transferFrom(address token, address from, address to, uint256 amount) private {
+    function _transferFrom(
+        address token,
+        address from,
+        address to,
+        uint256 amount
+    ) private {
         assembly {
             // We'll write our calldata to this slot below, but restore it later.
             let memPointer := mload(0x40)
